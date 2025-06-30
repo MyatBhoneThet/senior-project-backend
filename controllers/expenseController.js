@@ -1,52 +1,52 @@
 const Expense = require('../models/Expense');
 const xlsx = require('xlsx');
 
-// Add income
-exports.addIncome = async (req, res) => {
+// Add expense
+exports.addExpense = async (req, res) => {
     const userId = req.user.id;
     try{
-        const { icon, source, amount, date } = req.body;
+        const { icon, category, amount, date } = req.body;
 
         // Validate input check missing fields
-        if (!source || !amount || !date) {
+        if (!category || !amount || !date) {
             return res.status(400).json({ message: 'All Fields are required' });
         }
 
         // Create new income entry
-        const newIncome = new Income({
+        const newExpense = new Expense({
             userId,
             icon,
-            source,
+            category,
             amount,
             date: new Date(date) // Ensure date is stored as a Date object
         });
 
-        await newIncome.save();
+        await newExpense.save();
         res.status(200).json(newIncome);
     } catch (error) {
         res.status(500).json({ message: 'Server Error' });
     }
 }
 
-// Get all incomes
-exports.getAllIncome = async (req, res) => {
+// Get all expenses
+exports.getAllExpense = async (req, res) => {
     const userId = req.user.id;
     try {
         // Fetch all income entries for the user
-        const incomes = await Income.find({ userId }).sort({ date: -1 });
-        res.json(incomes);
+        const expense = await Expense.find({ userId }).sort({ date: -1 });
+        res.json(expense);
     } catch (error) {
         res.status(500).json({ message: 'Server Error' });
     }
 }
 
 // Delete income by ID
-exports.deleteIncome = async (req, res) => {
+exports.deleteExpense = async (req, res) => {
     try {
         // Find and delete the income entry
-        await Income.findByIdAndDelete(req.params.id);
+        await Expense.findByIdAndDelete(req.params.id);
 
-        res.json({ message: 'Income deleted successfully' });
+        res.json({ message: 'Expense deleted successfully' });
     } catch (error) {
         res.status(500).json({ message: 'Server Error' });
     }
@@ -54,14 +54,14 @@ exports.deleteIncome = async (req, res) => {
 
 
 // Download income data as Excel file
-exports.downloadIncomeExcel = async (req, res) => {
+exports.downloadExpenseExcel = async (req, res) => {
     const userId = req.user.id;
     try {
-        const income = await Income.find({ userId }).sort({ date: -1 });
+        const expense = await Expense.find({ userId }).sort({ date: -1 });
 
         // Prepare data for Excel
-        const data = income.map((item) => ({
-            Source: item.source,
+        const data = expense.map((item) => ({
+            category: item.category,
             Amount: item.amount,
             Date: item.date, // Format date as YYYY-MM-DD
         }));
@@ -69,10 +69,10 @@ exports.downloadIncomeExcel = async (req, res) => {
         // Create Excel file
         const ws = xlsx.utils.json_to_sheet(data);
         const wb = xlsx.utils.book_new();
-        xlsx.utils.book_append_sheet(wb, ws, 'Income');
-        xlsx.writeFile(wb, 'incomes_details.xlsx');
+        xlsx.utils.book_append_sheet(wb, ws, 'expense');
+        xlsx.writeFile(wb, 'expenses_details.xlsx');
         
-        res.download('income_details.xlsx');
+        res.download('expense_details.xlsx');
     } catch (error) {
         res.status(500).json({ message: 'Server Error' });
     }
