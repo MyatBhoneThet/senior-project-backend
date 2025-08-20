@@ -5,7 +5,7 @@ const xlsx = require('xlsx');
 exports.addExpense = async (req, res) => {
     const userId = req.user.id;
     try{
-        const { icon, category, amount, date } = req.body;
+        const { category, icon, amount, date } = req.body;
 
         // Validate input check missing fields
         if (!category || !amount || !date) {
@@ -22,7 +22,7 @@ exports.addExpense = async (req, res) => {
         });
 
         await newExpense.save();
-        res.status(200).json(newIncome);
+        res.status(200).json(newExpense);
     } catch (error) {
         res.status(500).json({ message: 'Server Error' });
     }
@@ -53,7 +53,7 @@ exports.deleteExpense = async (req, res) => {
 };
 
 
-// Download income data as Excel file
+// Download expense data as Excel file
 exports.downloadExpenseExcel = async (req, res) => {
     const userId = req.user.id;
     try {
@@ -67,10 +67,10 @@ exports.downloadExpenseExcel = async (req, res) => {
         }));
 
         // Create Excel file
-        const ws = xlsx.utils.json_to_sheet(data);
         const wb = xlsx.utils.book_new();
+        const ws = xlsx.utils.json_to_sheet(data);
         xlsx.utils.book_append_sheet(wb, ws, 'expense');
-        xlsx.writeFile(wb, 'expenses_details.xlsx');
+        xlsx.writeFile(wb, 'expense_details.xlsx');
         
         res.download('expense_details.xlsx');
     } catch (error) {
