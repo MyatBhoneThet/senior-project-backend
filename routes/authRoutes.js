@@ -1,6 +1,8 @@
 const express = require('express');
 const { protect } = require('../middleware/authMiddleware');
 const upload = require('../middleware/uploadMiddleware');
+const { googleAuth } = require('../controllers/authController');
+const { changePassword } = require('../controllers/userController'); 
 
 const { 
     registerUser, 
@@ -13,6 +15,10 @@ const router = express.Router();
 router.post('/register', registerUser);
 router.post('/login', loginUser);
 router.get('/getUser',protect , getUserInfo);
+
+router.post('/google', googleAuth);
+
+router.post('/change-password', protect, changePassword);
 
 router.post("/upload-image", upload.single("image"), (req, res) => {
     if (!req.file) {
