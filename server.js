@@ -13,6 +13,7 @@ connectDB();
 const allowedOrigins = [
   "http://localhost:5173",
   process.env.FRONTEND_URL,
+  'https://*.vercel.app'             // Allow all Vercel subdomains
 ];
 
 // ✅ CORS middleware
