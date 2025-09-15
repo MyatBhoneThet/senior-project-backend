@@ -1,29 +1,15 @@
-// const multer = require('multer');
-
-// // Store uploaded files in memory before saving to MongoDB
-// const storage = multer.memoryStorage();
-
-// const fileFilter = (req, file, cb) => {
-//   if (file.mimetype.startsWith('image/')) {
-//     cb(null, true);
-//   } else {
-//     cb(new Error('Only image files are allowed!'), false);
-//   }
-// };
-
-// const upload = multer({ storage, fileFilter });
-
-// module.exports = upload;
-
 const multer = require('multer');
 
-// Store uploaded files in memory (for Base64)
+// Memory storage -> req.file.buffer is available
 const storage = multer.memoryStorage();
 
-const fileFilter = (req, file, cb) => {
-  if (file.mimetype.startsWith('image/')) cb(null, true);
-  else cb(new Error('Only image files are allowed!'), false);
+const fileFilter = (_req, file, cb) => {
+  if (/image\/(png|jpe?g|gif|webp)/i.test(file.mimetype)) return cb(null, true);
+  cb(new Error('Only image files are allowed'));
 };
 
-const upload = multer({ storage, fileFilter });
-module.exports = upload;
+module.exports = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB
+});

@@ -1,80 +1,95 @@
-const User = require('../models/User');
 const Income = require('../models/Income');
+const Category = require('../models/Category');
 const xlsx = require('xlsx');
 
-// Add income
+// POST /api/v1/income/add
 exports.addIncome = async (req, res) => {
-    const userId = req.user.id;
-    try{
-        const { icon, source, amount, date } = req.body;
+  const userId = req.user.id || req.user._id;
 
-        // Validate input check missing fields
-        if (!source || !amount || !date) {
-            return res.status(400).json({ message: 'All Fields are required' });
-        }
+  try {
+    const { icon, source, amount, date, categoryId, category } = req.body;
 
-        // Create new income entry
-        const newIncome = new Income({
-            userId,
-            icon,
-            source,
-            amount,
-            date: new Date(date) // Ensure date is stored as a Date object
-        });
-
-        await newIncome.save();
-        res.status(200).json(newIncome);
-    } catch (error) {
-        res.status(500).json({ message: 'Server Error' });
+    if (!source || !amount || !date) {
+      return res.status(400).json({ message: 'Source, Amount and Date are required' });
     }
-}
 
-// Get all incomes
-exports.getAllIncome = async (req, res) => {
-    const userId = req.user.id;
-    try {
-        // Fetch all income entries for the user
-        const incomes = await Income.find({ userId }).sort({ date: -1 });
-        res.json(incomes);
-    } catch (error) {
-        res.status(500).json({ message: 'Server Error' });
+    // resolve category name snapshot for INCOME
+    let categoryName = 'Uncategorized';
+    if (categoryId) {
+      const cat = await Category.findOne({
+        _id: categoryId,
+        userId,
+        type: 'income',
+      });
+      if (!cat) return res.status(400).json({ message: 'Invalid income category' });
+      categoryName = cat.name;
+    } else if (category && String(category).trim()) {
+      categoryName = String(category).trim();
     }
-}
 
-// Delete income by ID
-exports.deleteIncome = async (req, res) => {
-    try {
-        // Find and delete the income entry
-        await Income.findByIdAndDelete(req.params.id);
+    const newIncome = await Income.create({
+      userId,
+      icon: icon || '',
+      source: source.trim(),
+      amount: Number(amount),
+      date: new Date(date),
+      categoryId: categoryId || undefined,
+      categoryName,
+      category: categoryName, // legacy alias
+    });
 
-        res.json({ message: 'Income deleted successfully' });
-    } catch (error) {
-        res.status(500).json({ message: 'Server Error' });
-    }
+    return res.status(201).json(newIncome);
+  } catch (error) {
+    console.error('addIncome error:', error);
+    return res.status(500).json({ message: 'Server Error' });
+  }
 };
 
+// GET /api/v1/income/get
+exports.getAllIncome = async (req, res) => {
+  const userId = req.user.id || req.user._id;
+  try {
+    const incomes = await Income.find({ userId }).sort({ date: -1 });
+    return res.json(incomes);
+  } catch (error) {
+    console.error('getAllIncome error:', error);
+    return res.status(500).json({ message: 'Server Error' });
+  }
+};
 
-// Download income data as Excel file
+// DELETE /api/v1/income/:id
+exports.deleteIncome = async (req, res) => {
+  try {
+    await Income.findByIdAndDelete(req.params.id);
+    return res.json({ message: 'Income deleted successfully' });
+  } catch (error) {
+    console.error('deleteIncome error:', error);
+    return res.status(500).json({ message: 'Server Error' });
+  }
+};
+
+// GET /api/v1/income/downloadexcel
 exports.downloadIncomeExcel = async (req, res) => {
-    const userId = req.user.id;
-    try {
-        const income = await Income.find({ userId }).sort({ date: -1 });
+  const userId = req.user.id || req.user._id;
+  try {
+    const income = await Income.find({ userId }).sort({ date: -1 });
 
-        // Prepare data for Excel
-        const data = income.map((item) => ({
-            Source: item.source,
-            Amount: item.amount,
-            Date: item.date, // Format date as YYYY-MM-DD
-        }));
+    const data = income.map((item) => ({
+      Source: item.source,
+      Category: item.categoryName || item.category || 'Uncategorized',
+      Amount: item.amount,
+      Date: item.date ? new Date(item.date).toISOString().slice(0, 10) : '',
+    }));
 
-        // Create Excel file
-        const wb = xlsx.utils.book_new();
-        const ws = xlsx.utils.json_to_sheet(data);
-        xlsx.utils.book_append_sheet(wb, ws, 'Income');
-        xlsx.writeFile(wb, 'incomes_details.xlsx');
-        
-        res.download('income_details.xlsx');
-    } catch (error) {
-        res.status(500).json({ message: 'Server Error' });
-    }
-}
+    const wb = xlsx.utils.book_new();
+    const ws = xlsx.utils.json_to_sheet(data);
+    xlsx.utils.book_append_sheet(wb, ws, 'Income');
+
+    const filename = 'income_details.xlsx';
+    xlsx.writeFile(wb, filename);
+    return res.download(filename);
+  } catch (error) {
+    console.error('downloadIncomeExcel error:', error);
+    return res.status(500).json({ message: 'Server Error' });
+  }
+};

@@ -1,5 +1,9 @@
 const dayjs = require('dayjs');
 const Transaction = require('../models/Transaction');
+const mongoose = require('mongoose');
+const Income = require('../models/Income');
+const Expense = require('../models/Expense');
+
 
 exports.createTransaction = async (req, res) => {
   try {
@@ -48,35 +52,55 @@ exports.deleteTransaction = async (req, res) => {
   res.json({ ok: true });
 };
 
-// Analytics: sums by category/source for 30d and overall
+
+function toBangkokRange(startYYYYMMDD, endYYYYMMDD) {
+  const start = new Date(`${startYYYYMMDD}T00:00:00.000+07:00`);
+  const end   = new Date(`${endYYYYMMDD}T23:59:59.999+07:00`);
+  return { start, end };
+}
+
+// GET /api/v1/transactions/analytics/sum?type=income|expense&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
 exports.sumBy = async (req, res) => {
-  const userId = req.user._id;
-  const { type, category, source } = req.query; // at least type
-  if (!type) return res.status(400).json({ message: 'type required (income|expense)' });
+  try {
+    // protect middleware should attach the user; support either id or _id
+    const uid = req.user?.id || req.user?._id;
+    if (!uid) return res.status(401).json({ message: 'Unauthorized' });
 
-  const matchBase = { userId, type };
-  if (category) matchBase.category = category;
-  if (source) matchBase.source = source;
+    const type = String(req.query.type || '').toLowerCase();
+    if (!['income', 'expense'].includes(type)) {
+      return res.status(400).json({ message: 'type required (income|expense)' });
+    }
 
-  const now = dayjs();
-  const from30 = now.subtract(30, 'day').toDate();
+    const startDate = req.query.startDate;
+    const endDate   = req.query.endDate;
+    if (!startDate || !endDate) {
+      return res.status(400).json({ message: 'startDate and endDate are required' });
+    }
 
-  const [last30, overall] = await Promise.all([
-    Transaction.aggregate([
-      { $match: { ...matchBase, date: { $gte: from30 } } },
-      { $group: { _id: null, total: { $sum: '$amount' } } },
-    ]),
-    Transaction.aggregate([
-      { $match: matchBase },
-      { $group: { _id: null, total: { $sum: '$amount' } } },
-    ]),
-  ]);
+    const { start, end } = toBangkokRange(startDate, endDate);
+    const Model = type === 'income' ? Income : Expense;
 
-  res.json({
-    type,
-    category: category || null,
-    source: source || null,
-    last30Days: last30[0]?.total || 0,
-    overall: overall[0]?.total || 0,
-  });
+    // Prefer business `date`, fall back to `createdAt` so older docs still count
+    const pipeline = [
+      { $match: { userId: new mongoose.Types.ObjectId(uid) } },
+      {
+        $addFields: {
+          _usedDate: { $ifNull: ['$date', '$createdAt'] },
+          _amt: { $ifNull: ['$amount', 0] },
+        },
+      },
+      { $match: { _usedDate: { $gte: start, $lte: end } } },
+      // If expenses are saved as negative amounts, $abs makes the sum positive
+      { $group: { _id: null, total: { $sum: type === 'expense' ? { $abs: '$_amt' } : '$_amt' } } },
+      { $project: { _id: 0, total: 1 } },
+    ];
+
+    const agg = await Model.aggregate(pipeline);
+    const total = agg?.[0]?.total || 0;
+
+    return res.json({ total });
+  } catch (err) {
+    console.error('transactions.analytics.sum error:', err);
+    return res.status(500).json({ message: 'Internal error' });
+  }
 };

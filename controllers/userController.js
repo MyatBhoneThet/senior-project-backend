@@ -1,139 +1,105 @@
-// const User = require('../models/User');
-// const fs = require('fs');
-// const path = require('path');
-
-// // Get user profile
-// exports.getUserProfile = async (req, res) => {
-//   try {
-//     const user = await User.findById(req.params.id);
-//     res.json(user);
-//   } catch (err) {
-//     res.status(500).json({ error: err.message });
-//   }
-// };
-
-// // Update user profile
-// exports.updateUserProfile = async (req, res) => {
-//   try {
-//     const { name, username, bio, age, gender, aboutMe, interests, accomplishments, contact } = req.body;
-//     const user = await User.findById(req.params.id);
-
-//     if (!user) return res.status(404).json({ error: 'User not found' });
-
-//     // Update fields
-//     user.name = name || user.name;
-//     user.username = username || user.username;
-//     user.bio = bio || user.bio;
-//     user.age = age || user.age;
-//     user.gender = gender || user.gender;
-//     user.aboutMe = aboutMe || user.aboutMe;
-//     user.interests = interests ? interests.split(',').map(s => s.trim()) : user.interests;
-//     user.accomplishments = accomplishments ? accomplishments.split('\n').map(s => s.trim()) : user.accomplishments;
-//     user.contact = contact || user.contact;
-
-//     // Profile photo
-//     if (req.file) {
-//       if (user.profilePhoto) {
-//         // Remove old photo
-//         fs.unlinkSync(path.join(__dirname, '../uploads', path.basename(user.profilePhoto)));
-//       }
-//       user.profilePhoto = req.file.path;
-//     }
-
-//     await user.save();
-//     res.json(user);
-//   } catch (err) {
-//     res.status(500).json({ error: err.message });
-//   }
-// };
-
-// // Remove profile photo
-// exports.removeProfilePhoto = async (req, res) => {
-//   try {
-//     const user = await User.findById(req.params.id);
-//     if (user && user.profilePhoto) {
-//       fs.unlinkSync(path.join(__dirname, '../uploads', path.basename(user.profilePhoto)));
-//       user.profilePhoto = "";
-//       await user.save();
-//     }
-//     res.json(user);
-//   } catch (err) {
-//     res.status(500).json({ error: err.message });
-//   }
-// };
-
 const User = require('../models/User');
+const fs = require('fs');
+const path = require('path');
 
-// Get current user profile
+// Get user profile
 exports.getUserProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id || req.user._id);
-    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-    res.json(user);
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    res.json({ success: true, user });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error('Get user profile error:', err);
+    res.status(500).json({ success: false, message: 'Error fetching user profile', error: err.message });
   }
 };
 
-// Update profile info (without removing Base64)
+// Update user profile
 exports.updateUserProfile = async (req, res) => {
   try {
-    const userId = req.user.id || req.user._id;
-    const updateData = { ...req.body };
-
-    if (typeof updateData.interests === 'string') {
-      updateData.interests = updateData.interests.split(',').map(s => s.trim()).filter(Boolean);
+    const { name, fullName, username, bio, age, gender, aboutMe, interests, accomplishments, contact } = req.body;
+    const user = await User.findById(req.params.id);
+    
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
-    if (typeof updateData.accomplishments === 'string') {
-      updateData.accomplishments = updateData.accomplishments.split('\n').map(s => s.trim()).filter(Boolean);
+
+    // Update fields
+    if (name !== undefined) user.name = name;
+    if (fullName !== undefined) user.fullName = fullName;
+    if (username !== undefined) user.username = username;
+    if (bio !== undefined) user.bio = bio;
+    if (age !== undefined) user.age = Number(age);
+    if (gender !== undefined) user.gender = gender;
+    if (aboutMe !== undefined) user.aboutMe = aboutMe;
+    
+    // Handle array fields
+    if (interests !== undefined) {
+      user.interests = typeof interests === 'string' 
+        ? interests.split(',').map(s => s.trim()).filter(Boolean)
+        : interests;
     }
-    if (updateData.age) updateData.age = Number(updateData.age);
+    if (accomplishments !== undefined) {
+      user.accomplishments = typeof accomplishments === 'string' 
+        ? accomplishments.split('\n').map(s => s.trim()).filter(Boolean)
+        : accomplishments;
+    }
+    if (contact !== undefined) {
+      user.contact = { ...user.contact, ...contact };
+    }
 
-    const updatedUser = await User.findByIdAndUpdate(userId, { $set: updateData }, { new: true, runValidators: true });
-    if (!updatedUser) return res.status(404).json({ success: false, message: 'User not found' });
+    // Handle profile photo upload (if using file system storage)
+    if (req.file) {
+      // Remove old photo if exists
+      if (user.profilePhoto && typeof user.profilePhoto === 'string') {
+        const oldPhotoPath = path.join(__dirname, '../uploads', path.basename(user.profilePhoto));
+        if (fs.existsSync(oldPhotoPath)) {
+          fs.unlinkSync(oldPhotoPath);
+        }
+      }
+      
+      // Save new photo path
+      user.profilePhoto = req.file.path;
+    }
 
-    res.json(updatedUser);
+    await user.save();
+    res.json({ success: true, message: 'Profile updated successfully', user });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
-
-// Upload profile photo (Base64)
-exports.uploadProfilePhoto = async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
-
-    const userId = req.user.id || req.user._id;
-    const base64Image = req.file.buffer.toString('base64');
-
-    const updatedUser = await User.findByIdAndUpdate(
-      userId,
-      { profilePhoto: { data: base64Image, contentType: req.file.mimetype } },
-      { new: true }
-    );
-
-    if (!updatedUser) return res.status(404).json({ success: false, message: 'User not found' });
-
-    res.json({ success: true, message: 'Profile photo uploaded successfully', user: updatedUser });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error('Update user profile error:', err);
+    if (err.name === 'ValidationError') {
+      const validationErrors = Object.values(err.errors).map(e => e.message);
+      return res.status(400).json({ success: false, message: 'Validation failed', errors: validationErrors });
+    }
+    res.status(500).json({ success: false, message: 'Error updating user profile', error: err.message });
   }
 };
 
 // Remove profile photo
 exports.removeProfilePhoto = async (req, res) => {
   try {
-    const userId = req.user.id || req.user._id;
-    const updatedUser = await User.findByIdAndUpdate(
-      userId,
-      { profilePhoto: { data: "", contentType: "" } },
-      { new: true }
-    );
+    const user = await User.findById(req.params.id);
+    
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
 
-    if (!updatedUser) return res.status(404).json({ success: false, message: 'User not found' });
-
-    res.json({ success: true, message: 'Profile photo removed', user: updatedUser });
+    // Remove file from filesystem if it exists
+    if (user.profilePhoto && typeof user.profilePhoto === 'string') {
+      const photoPath = path.join(__dirname, '../uploads', path.basename(user.profilePhoto));
+      if (fs.existsSync(photoPath)) {
+        fs.unlinkSync(photoPath);
+      }
+    }
+    
+    // Clear photo from database
+    user.profilePhoto = "";
+    await user.save();
+    
+    res.json({ success: true, message: 'Profile photo removed successfully', user });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error('Remove profile photo error:', err);
+    res.status(500).json({ success: false, message: 'Error removing profile photo', error: err.message });
   }
 };

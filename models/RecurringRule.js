@@ -1,25 +1,25 @@
 const mongoose = require('mongoose');
+
 const RecurringRuleSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
 
-  // What gets created monthly
+  // What to create monthly
   type: { type: String, enum: ['income', 'expense'], required: true },
   category: { type: String, required: true },
   source: { type: String },
 
-  // Amount settings
-  amount: { type: Number, required: true, min: 0 }, // fixed monthly amount
+  // Amount
+  amount: { type: Number, required: true, min: 0 },
 
-  // Schedule settings
+  // Schedule
   frequency: { type: String, enum: ['monthly'], default: 'monthly' },
-  dayOfMonth: { type: Number, default: 1 }, // 1..31, will smart-clamp to month length
+  dayOfMonth: { type: Number, default: 1 }, // 1..31; we clamp by month length
   startDate: { type: Date, required: true },
-  endDate: { type: Date }, // optional for indefinite rules
-  timezone: { type: String, default: 'Asia/Bangkok' },
+  endDate: { type: Date }, // optional
 
   // State
   isActive: { type: Boolean, default: true },
-  lastRunAt: { type: Date }, // for diagnostics
+  lastRunAt: { type: Date },
 
   // Display
   notes: { type: String },
