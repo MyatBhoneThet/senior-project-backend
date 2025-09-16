@@ -3,9 +3,37 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const connectDB = require('./config/db');
+const { startRecurrenceCron } = require('./services/recurrenceEngine');
 
+const app = express();
+
+// Connect DB
 connectDB();
 
+// Basic middlewares
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// CORS: allow localhost:5173 + env FRONTEND_URL
+const allowedOrigins = [
+  'http://localhost:5173',
+  process.env.FRONTEND_URL,
+].filter(Boolean);
+
+app.use(
+  cors({
+    origin(origin, cb) {
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error(`CORS blocked for origin: ${origin}`));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
+
+// Routes
 const authRoutes        = require('./routes/authRoutes');
 const incomeRoutes      = require('./routes/incomeRoutes');
 const expenseRoutes     = require('./routes/expenseRoutes');
@@ -16,26 +44,6 @@ const chatRoutes        = require('./routes/chatRoutes');
 const userRoutes        = require('./routes/userRoutes');
 const recurringRoutes   = require('./routes/recurringRoutes');
 
-const app = express();
-
-// CORS for Vite + your deployed frontend
-const allowedOrigins = ['http://localhost:5173', process.env.FRONTEND_URL].filter(Boolean);
-app.use(cors({
-  origin(origin, cb) {
-    if (!origin) return cb(null, true);
-    if (allowedOrigins.includes(origin)) return cb(null, true);
-    return cb(new Error(`CORS blocked for origin: ${origin}`));
-  },
-  credentials: true,
-}));
-
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true }));
-
-// Serve uploaded images
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-// Mount routes
 app.use('/api/v1/auth',         authRoutes);
 app.use('/api/v1/income',       incomeRoutes);
 app.use('/api/v1/expense',      expenseRoutes);
@@ -49,4 +57,8 @@ app.use('/api/v1/recurring',    recurringRoutes);
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 8000;
-app.listen(PORT, () => console.log(`Server at http://localhost:${PORT}`));
+
+// Start cron safely (no timezone string to avoid invalid time zone error)
+startRecurrenceCron();
+
+app.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));

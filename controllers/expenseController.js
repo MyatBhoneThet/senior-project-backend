@@ -70,7 +70,7 @@ exports.deleteExpense = async (req, res) => {
   }
 };
 
-// GET /api/v1/expense/downloadexpense
+// GET /api/v1/expense/downloadexcel
 exports.downloadExpenseExcel = async (req, res) => {
   const userId = req.user.id || req.user._id;
   try {
@@ -87,11 +87,13 @@ exports.downloadExpenseExcel = async (req, res) => {
     const ws = xlsx.utils.json_to_sheet(data);
     xlsx.utils.book_append_sheet(wb, ws, 'Expenses');
 
-    const filename = 'expense_details.xlsx';
-    xlsx.writeFile(wb, filename);
-    return res.download(filename);
+    const buffer = xlsx.write(wb, { bookType: 'xlsx', type: 'buffer' });
+    res.setHeader('Content-Disposition', 'attachment; filename="expense_details.xlsx"');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    return res.status(200).send(buffer);
   } catch (error) {
     console.error('downloadExpenseExcel error:', error);
     return res.status(500).json({ message: 'Server Error' });
   }
 };
+
