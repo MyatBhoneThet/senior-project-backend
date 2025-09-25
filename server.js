@@ -9,7 +9,10 @@ const app = express();
 
 // Connect DB
 connectDB();
-
+app.use((req, res, next) => {
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
+  next();
+});
 // Basic middlewares
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
