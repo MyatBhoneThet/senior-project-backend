@@ -2,6 +2,23 @@ const Expense = require('../models/Expense');
 const Category = require('../models/Category');
 const xlsx = require('xlsx');
 
+// Normalize "date" from "YYYY-MM-DD" or ISO into a Date at UTC midnight
+function toUtcMidnight(v) {
+  if (!v) return v;
+  if (v instanceof Date) {
+    // force to UTC midnight (strip time if it has one)
+    return new Date(Date.UTC(v.getUTCFullYear(), v.getUTCMonth(), v.getUTCDate(), 0, 0, 0, 0));
+  }
+  const s = String(v).trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/); // "YYYY-MM-DD" from your forms
+  if (m) return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], 0, 0, 0, 0));
+  const parsed = new Date(s);
+  if (!isNaN(parsed)) {
+    return new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate(), 0, 0, 0, 0));
+  }
+  return undefined;
+}
+
 // POST /api/v1/expense/add
 exports.addExpense = async (req, res) => {
   const userId = req.user.id || req.user._id;
@@ -34,7 +51,7 @@ exports.addExpense = async (req, res) => {
       source: source || '',
       icon: icon || '',
       amount: Number(amount),
-      date: new Date(date),
+      date: toUtcMidnight(date),                 // ✅ normalize
       categoryId: categoryId || undefined,
       categoryName,
       category: categoryName, // keep legacy field in sync
@@ -96,7 +113,7 @@ exports.downloadExpenseExcel = async (req, res) => {
     return res.status(500).json({ message: 'Server Error' });
   }
 };
-// controllers/expenseController.js (append below existing exports)
+
 // PUT /api/v1/expense/:id
 exports.updateExpense = async (req, res) => {
   const userId = req.user.id || req.user._id;
@@ -108,7 +125,7 @@ exports.updateExpense = async (req, res) => {
     const update = {};
     if (typeof source !== 'undefined') update.source = String(source).trim();
     if (typeof amount !== 'undefined') update.amount = Number(amount);
-    if (typeof date !== 'undefined') update.date = date;
+    if (typeof date !== 'undefined') update.date = toUtcMidnight(date); // ✅ normalize on update
     if (typeof icon !== 'undefined') update.icon = icon;
 
     if (categoryId) {

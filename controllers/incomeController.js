@@ -1,6 +1,23 @@
 const Income = require('../models/Income');
 const Category = require('../models/Category');
 const xlsx = require('xlsx');
+const { autoAllocate } = require('../services/goalAutoAllocator'); // ADDED
+
+// Normalize "date" into a Date at UTC midnight
+function toUtcMidnight(v) {
+  if (!v) return v;
+  if (v instanceof Date) {
+    return new Date(Date.UTC(v.getUTCFullYear(), v.getUTCMonth(), v.getUTCDate(), 0, 0, 0, 0));
+  }
+  const s = String(v).trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], 0, 0, 0, 0));
+  const parsed = new Date(s);
+  if (!isNaN(parsed)) {
+    return new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate(), 0, 0, 0, 0));
+  }
+  return undefined;
+}
 
 // POST /api/v1/income/add
 exports.addIncome = async (req, res) => {
@@ -30,13 +47,26 @@ exports.addIncome = async (req, res) => {
     const newIncome = await Income.create({
       userId,
       icon: icon || '',
-      source: source.trim(),
+      source: String(source).trim(),
       amount: Number(amount),
-      date: new Date(date),
+      date: toUtcMidnight(date),                 // ✅ normalize
       categoryId: categoryId || undefined,
       categoryName,
       category: categoryName, // legacy alias
     });
+
+    // ADDED: auto-allocate to enabled goals right after income is created
+    try {
+      await autoAllocate({
+        userId,
+        incomeAmount: Number(newIncome.amount),
+        memo: `Auto-allocate on income #${newIncome._id}`,
+      });
+    } catch (allocErr) {
+      // Don't fail the request if allocation fails — just log it.
+      console.warn('autoAllocate failed:', allocErr?.message || allocErr);
+    }
+    // END ADDED
 
     return res.status(201).json(newIncome);
   } catch (error) {
@@ -95,7 +125,7 @@ exports.downloadIncomeExcel = async (req, res) => {
   }
 };
 
-// controllers/incomeController.js (append below existing exports)
+// PUT /api/v1/income/:id
 exports.updateIncome = async (req, res) => {
   const userId = req.user.id || req.user._id;
   const { id } = req.params;
@@ -106,7 +136,7 @@ exports.updateIncome = async (req, res) => {
     const update = {};
     if (typeof source !== 'undefined') update.source = String(source).trim();
     if (typeof amount !== 'undefined') update.amount = Number(amount);
-    if (typeof date !== 'undefined') update.date = date;
+    if (typeof date !== 'undefined') update.date = toUtcMidnight(date); // ✅ normalize on update
     if (typeof icon !== 'undefined') update.icon = icon;
 
     if (categoryId) {

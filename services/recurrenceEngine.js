@@ -1,148 +1,206 @@
-const cron = require('node-cron');
+// backend/services/recurrenceEngine.js
 const RecurringRule = require('../models/RecurringRule');
-const Transaction  = require('../models/Transaction'); // ok if unused; wrapped in try/catch
-const Income       = require('../models/Income');
-const Expense      = require('../models/Expense');
+const Expense = require('../models/Expense');
+const Income = require('../models/Income');
 
-// --- helpers ---------------------------------------------------------------
-function lastDayOfMonth(y, mIdx) { return new Date(y, mIdx + 1, 0).getDate(); }
-function clampDay(y, mIdx, d) { return Math.min(Math.max(d || 1, 1), lastDayOfMonth(y, mIdx)); }
-function periodKey(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; }
-
-// store date-only (avoid tz shifts)
-function toDateOnly(d) {
-  const dt = new Date(d);
-  return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
+/* ============== TZ helpers ============== */
+function toLocal(dUtc, offsetMin) { return new Date(dUtc.getTime() + offsetMin * 60_000); }
+function toUTC(dLocal, offsetMin) { return new Date(dLocal.getTime() - offsetMin * 60_000); }
+function startOfLocalDay(dUtc, offsetMin) {
+  const L = toLocal(dUtc, offsetMin);
+  const s = new Date(Date.UTC(L.getUTCFullYear(), L.getUTCMonth(), L.getUTCDate(), 0,0,0,0));
+  return toUTC(s, offsetMin);
+}
+function endOfLocalDay(dUtc, offsetMin) {
+  const L = toLocal(dUtc, offsetMin);
+  const e = new Date(Date.UTC(L.getUTCFullYear(), L.getUTCMonth(), L.getUTCDate(), 23,59,59,999));
+  return toUTC(e, offsetMin);
 }
 
-/**
- * First-month rule:
- *  - In the month of startDate, use startDate.getDate() (=> start=today => create TODAY)
- *  - Later months: use rule.dayOfMonth if provided, else startDate.getDate()
- */
-function monthlyDay(rule, cursorYM) {
-  const start = toDateOnly(rule.startDate);
-  const sameYM = cursorYM.getFullYear() === start.getFullYear() && cursorYM.getMonth() === start.getMonth();
-  const fallback = rule.dayOfMonth || start.getDate() || 1;
-  return sameYM ? start.getDate() : fallback;
+/* ============== date math ============== */
+function daysInMonth(y, m) { return new Date(Date.UTC(y, m + 1, 0)).getUTCDate(); }
+
+function nextMonthly(fromLocal, dom) {
+  const y = fromLocal.getUTCFullYear();
+  const m = fromLocal.getUTCMonth();
+  const nm = m + 1;
+  const ny = y + Math.floor(nm / 12);
+  const realM = nm % 12;
+  const d = Math.min(dom, daysInMonth(ny, realM));
+  return new Date(Date.UTC(ny, realM, d, 0, 0, 0, 0));
 }
 
-/**
- * Generate all due occurrences up to "now" (inclusive).
- * If debug=true, return per-rule reasons (CREATED / DUPLICATE / BEFORE_START / IN_FUTURE / AFTER_END).
- */
-async function runGeneration(userId = null, debug = false) {
-  const q = { isActive: true };
-  if (userId) q.userId = userId;
+function nextWeekly(fromLocal) {
+  const nx = new Date(fromLocal);
+  nx.setUTCDate(nx.getUTCDate() + 7);
+  nx.setUTCHours(0,0,0,0);
+  return nx;
+}
 
-  const rules = await RecurringRule.find(q).sort({ _id: 1 }).lean();
-  const now = toDateOnly(new Date());
+function nextYearly(fromLocal) {
+  const y = fromLocal.getUTCFullYear() + 1;
+  const m = fromLocal.getUTCMonth();
+  let d = fromLocal.getUTCDate();
+  // clamp Feb 29 → Feb 28 on non-leap years
+  if (m === 1 && d === 29 && daysInMonth(y, m) === 28) d = 28;
+  return new Date(Date.UTC(y, m, d, 0, 0, 0, 0));
+}
 
-  let createdTx = 0, createdIncome = 0, createdExpense = 0;
-  const details = [];
+/* Step forward exactly one period from a given local midnight */
+function nextAfter(rule, localMid) {
+  const rep = String(rule.repeat || 'monthly').toLowerCase();
+  if (rep === 'weekly') return nextWeekly(localMid);
+  if (rep === 'yearly') return nextYearly(localMid);
+  const dom = rule.dayOfMonth || localMid.getUTCDate();
+  return nextMonthly(localMid, dom);
+}
 
-  for (const rule of rules) {
-    const start = toDateOnly(rule.startDate);
-    const end   = rule.endDate ? toDateOnly(rule.endDate) : null;
+/* ============== core generator ============== */
+async function ensureTransaction(rule, whenLocalMidnight) {
+  const offset = rule.tzOffsetMinutes ?? 420;
 
-    let cursorYM = new Date(start.getFullYear(), start.getMonth(), 1);
-    if (rule.lastRunAt) {
-      const last = new Date(rule.lastRunAt);
-      cursorYM = new Date(last.getFullYear(), last.getMonth() + 1, 1);
+  // Convert to UTC (this is what we save as the transaction's date)
+  const dateUTC = toUTC(whenLocalMidnight, offset);
+
+  const base = {
+    userId: rule.userId,
+    category: rule.category,
+    source: rule.source || '',
+    amount: Number(rule.amount),
+    date: dateUTC, // normalized UTC midnight for that local day
+    notes: (rule.notes ? `${rule.notes} ` : '') + '[Recurring]',
+  };
+
+  const Model = rule.type === 'income' ? Income : Expense;
+
+  // Idempotency: look for an exact same record (same date + key fields).
+  const exists = await Model.findOne({
+    userId: rule.userId,
+    category: rule.category,
+    source: rule.source || '',
+    amount: Number(rule.amount),
+    date: dateUTC,
+  }).lean();
+
+  if (!exists) {
+    await Model.create(base);
+  }
+}
+
+/* iterate occurrences from "fromLocal" to "untilLocal" inclusive, by rule.repeat */
+function* iterateOccurrences(rule, fromLocal, untilLocal) {
+  const rep = String(rule.repeat || 'monthly').toLowerCase();
+  let cursor = new Date(fromLocal);
+
+  if (rep === 'weekly') {
+    while (cursor <= untilLocal) {
+      yield new Date(cursor);
+      cursor = nextWeekly(cursor);
     }
-
-    const hardStop = end && end < now ? end : now;
-    const ruleLog = { ruleId: String(rule._id), type: rule.type, category: rule.category, source: rule.source || '', checks: [] };
-
-    while (cursorYM <= hardStop) {
-      const day = clampDay(cursorYM.getFullYear(), cursorYM.getMonth(), monthlyDay(rule, cursorYM));
-      const occur = toDateOnly(new Date(cursorYM.getFullYear(), cursorYM.getMonth(), day));
-
-      const entry = {
-        month: `${cursorYM.getFullYear()}-${String(cursorYM.getMonth()+1).padStart(2,'0')}`,
-        occurrenceISO: occur.toISOString(),
-        action: null,
-        reason: null
-      };
-
-      if (occur < start) { entry.action = 'SKIPPED'; entry.reason = 'BEFORE_START'; ruleLog.checks.push(entry); cursorYM = new Date(cursorYM.getFullYear(), cursorYM.getMonth()+1, 1); continue; }
-      if (end && occur > end) { entry.action = 'STOP'; entry.reason = 'AFTER_END'; ruleLog.checks.push(entry); break; }
-      if (occur > now) { entry.action = 'STOP'; entry.reason = 'IN_FUTURE'; ruleLog.checks.push(entry); break; }
-
-      const base = {
-        userId: rule.userId,
-        type: rule.type,
-        category: rule.category,
-        source: rule.source || '',
-        amount: rule.amount,
-        date: occur,
-        notes: rule.notes || '',
-        isRecurring: true,
-        recurringRuleId: rule._id,
-        periodKey: periodKey(occur),
-      };
-
-      // Optional transaction (idempotent if you created the unique index)
-      try { await Transaction.create(base); createdTx++; }
-      catch (e) { if (!(e && e.code === 11000)) {/* ignore dup or missing model */} }
-
-      // Write to the collections your UI reads:
-      if (rule.type === 'income') {
-        const exists = await Income.findOne({ userId: rule.userId, amount: rule.amount, date: occur, categoryName: rule.category }).lean();
-        if (!exists) {
-          await Income.create({
-            userId: rule.userId,
-            source: rule.source || 'Recurring',
-            amount: rule.amount,
-            date: occur,
-            // write BOTH names to match whatever your UI/endpoint reads
-            categoryName: rule.category,
-            category: rule.category,
-            icon: '',
-          });
-          createdIncome++; entry.action = 'CREATED_INCOME';
-        } else { entry.action = 'SKIPPED'; entry.reason = 'DUPLICATE_INCOME'; }
-      } else {
-        const exists = await Expense.findOne({ userId: rule.userId, amount: rule.amount, date: occur, categoryName: rule.category }).lean();
-        if (!exists) {
-          await Expense.create({
-            userId: rule.userId,
-            source: rule.source || 'Recurring',
-            amount: rule.amount,
-            date: occur,
-            categoryName: rule.category,
-            category: rule.category,
-            icon: '',
-          });
-          createdExpense++; entry.action = 'CREATED_EXPENSE';
-        } else { entry.action = 'SKIPPED'; entry.reason = 'DUPLICATE_EXPENSE'; }
-      }
-
-      ruleLog.checks.push(entry);
-      cursorYM = new Date(cursorYM.getFullYear(), cursorYM.getMonth()+1, 1);
-    }
-
-    try { await RecurringRule.updateOne({ _id: rule._id }, { $set: { lastRunAt: new Date() } }); }
-    catch (e) { console.error('[recurrence] update lastRunAt failed', e); }
-
-    if (debug) details.push(ruleLog);
+    return;
   }
 
-  const summary = { createdTx, createdIncome, createdExpense };
-  return debug ? { ...summary, rulesCount: rules.length, details } : summary;
+  if (rep === 'yearly') {
+    while (cursor <= untilLocal) {
+      yield new Date(cursor);
+      cursor = nextYearly(cursor);
+    }
+    return;
+  }
+
+  // monthly (default)
+  const dom = rule.dayOfMonth || fromLocal.getUTCDate();
+
+  // If fromLocal isn't on the desired DOM, snap it to the DOM (clamped)
+  if (fromLocal.getUTCDate() !== dom) {
+    const y = fromLocal.getUTCFullYear();
+    const m = fromLocal.getUTCMonth();
+    const d = Math.min(dom, daysInMonth(y, m));
+    cursor = new Date(Date.UTC(y, m, d, 0,0,0,0));
+  }
+
+  while (cursor <= untilLocal) {
+    yield new Date(cursor);
+    cursor = nextMonthly(cursor, dom);
+  }
+}
+
+async function runForRule(rule, nowUtc) {
+  if (!rule.isActive) return;
+
+  const offset = rule.tzOffsetMinutes ?? 420;
+
+  // “today” in local tz (00:00 local)
+  const todayLocal = toLocal(nowUtc, offset);
+  const todayLocalMid = new Date(Date.UTC(
+    todayLocal.getUTCFullYear(), todayLocal.getUTCMonth(), todayLocal.getUTCDate(), 0,0,0,0
+  ));
+
+  const startLocal = toLocal(rule.startDate, offset);
+  const startLocalMid = new Date(Date.UTC(
+    startLocal.getUTCFullYear(), startLocal.getUTCMonth(), startLocal.getUTCDate(), 0,0,0,0
+  ));
+
+  // local end boundary (inclusive)
+  const endLocalMid = rule.endDate
+    ? endOfLocalDay(toUTC(toLocal(rule.endDate, offset), 0), 0) // use end-of-day local then convert
+    : null;
+
+  // Resume point:
+  // - if lastGeneratedAt exists, move to the NEXT occurrence AFTER that local day
+  // - else start from the rule's startLocalMid
+  let startFromLocal = startLocalMid;
+  if (rule.lastGeneratedAt) {
+    const lastLocal = toLocal(rule.lastGeneratedAt, offset);
+    const lastLocalMid = new Date(Date.UTC(
+      lastLocal.getUTCFullYear(), lastLocal.getUTCMonth(), lastLocal.getUTCDate(), 0,0,0,0
+    ));
+    startFromLocal = nextAfter(rule, lastLocalMid);
+  }
+
+  // Generate up to today (or endDate if earlier)
+  const untilLocal = endLocalMid ? (endLocalMid < todayLocalMid ? endLocalMid : todayLocalMid) : todayLocalMid;
+
+  // nothing to do
+  if (startFromLocal > untilLocal) return;
+
+  for (const occLocalMid of iterateOccurrences(rule, startFromLocal, untilLocal)) {
+    await ensureTransaction(rule, occLocalMid);
+    // update lastGeneratedAt to this exact occurrence (in UTC)
+    rule.lastGeneratedAt = toUTC(occLocalMid, offset);
+  }
+
+  rule.lastRunAt = nowUtc;
+  await rule.save();
+}
+
+/* ============== public API ============== */
+async function runRecurrenceOnce(onlyUserId = null) {
+  const nowUtc = new Date();
+  const q = { isActive: true };
+  if (onlyUserId) q.userId = onlyUserId;
+
+  // need full docs so we can mutate & save
+  const rules = await RecurringRule.find(q).lean(false);
+
+  for (const rule of rules) {
+    try {
+      await runForRule(rule, nowUtc);
+    } catch (e) {
+      console.error('recurrenceEngine rule error', rule._id, e);
+    }
+  }
 }
 
 function startRecurrenceCron() {
-  try {
-    // 00:15 server local time; no timezone string (avoids "Invalid time zone")
-    cron.schedule('15 0 * * *', async () => {
-      try { console.log('[recurrence] nightly:', await runGeneration(null, false)); }
-      catch (e) { console.error('[recurrence] nightly error', e); }
-    });
-    console.log('[recurrence] cron scheduled 15 0 * * * (server local time)');
-  } catch (e) {
-    console.error('[recurrence] cron schedule failed', e);
-  }
+  // Run now, then hourly. Works fine on Render/Heroku (best-effort after dyno wake).
+  runRecurrenceOnce().catch(() => {});
+  setInterval(() => runRecurrenceOnce().catch(() => {}), 60 * 60 * 1000);
 }
 
-module.exports = { runGeneration, startRecurrenceCron };
+module.exports = {
+  startRecurrenceCron,
+  runRecurrenceOnce,
+  // For backwards compatibility if your server imports startRecurrenceEngine():
+  startRecurrenceEngine: startRecurrenceCron,
+};

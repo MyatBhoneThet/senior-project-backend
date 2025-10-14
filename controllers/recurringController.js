@@ -1,103 +1,107 @@
+// backend/controllers/recurringController.js
 const RecurringRule = require('../models/RecurringRule');
-const { runGeneration } = require('../services/recurrenceEngine');
+const { runRecurrenceOnce } = require('../services/recurrenceEngine');
 
-const parseDate = (v) => (v ? new Date(v) : undefined);
-
-exports.createRule = async (req, res) => {
+// Create rule
+exports.createRule = async (req, res, next) => {
   try {
-    const userId = req.user._id || req.user.id;
-    const b = req.body || {};
-    const doc = await RecurringRule.create({
-      userId,
-      type: b.type,                 // 'income' | 'expense'
-      category: b.category || '',
-      source: b.source || '',
-      amount: Number(b.amount),
-      dayOfMonth: b.dayOfMonth ? Number(b.dayOfMonth) : undefined, // optional
-      startDate: parseDate(b.startDate) || new Date(),
-      endDate: parseDate(b.endDate),
-      isActive: b.isActive !== false,
-      notes: b.notes || '',
+    const body = req.body || {};
+    const repeat = String(body.repeat || 'monthly').toLowerCase();
+    if (!['weekly', 'monthly', 'yearly'].includes(repeat)) {
+      return res.status(400).json({ message: 'repeat must be weekly, monthly, or yearly' });
+    }
+
+    const rule = await RecurringRule.create({
+      userId: req.user._id,
+      type: body.type,
+      category: body.category,
+      source: body.source || '',
+      amount: Number(body.amount),
+      repeat,
+      dayOfMonth: body.dayOfMonth || undefined,
+      startDate: body.startDate,
+      endDate: body.endDate || undefined,
+      isActive: body.isActive !== false,
+      notes: body.notes || '',
+      tzOffsetMinutes: body.tzOffsetMinutes ?? 420,
     });
-    const result = await runGeneration(userId);   // immediate materialization
-    res.status(201).json({ rule: doc, ...result });
-  } catch (e) {
-    console.error('createRule', e);
-    res.status(400).json({ message: e.message || 'Failed to create rule' });
-  }
+
+    res.json(rule);
+  } catch (err) { next(err); }
 };
 
-exports.getRules = async (req, res) => {
+// List rules
+exports.getRules = async (req, res, next) => {
   try {
-    const userId = req.user._id || req.user.id;
-    const rules = await RecurringRule.find({ userId }).sort({ createdAt: -1 });
+    const rules = await RecurringRule.find({ userId: req.user._id }).sort({ createdAt: -1 });
     res.json(rules);
-  } catch (e) {
-    res.status(500).json({ message: e.message || 'Failed to load rules' });
-  }
+  } catch (err) { next(err); }
 };
 
-exports.updateRule = async (req, res) => {
+// Update rule
+exports.updateRule = async (req, res, next) => {
   try {
-    const userId = req.user._id || req.user.id;
-    const { id } = req.params;
-    const b = req.body || {};
-
-    const patch = {
-      type: b.type,
-      category: b.category,
-      source: b.source,
-      amount: b.amount !== undefined ? Number(b.amount) : undefined,
-      dayOfMonth: b.dayOfMonth !== undefined ? Number(b.dayOfMonth) : undefined,
-      startDate: b.startDate ? parseDate(b.startDate) : undefined,
-      endDate: b.endDate ? parseDate(b.endDate) : undefined,
-      isActive: typeof b.isActive === 'boolean' ? b.isActive : undefined,
-      notes: b.notes,
-    };
-    Object.keys(patch).forEach(k => patch[k] === undefined && delete patch[k]);
-
-    const doc = await RecurringRule.findOneAndUpdate({ _id: id, userId }, { $set: patch }, { new: true });
-    if (!doc) return res.status(404).json({ message: 'Rule not found' });
-
-    const result = await runGeneration(userId);
-    res.json({ rule: doc, ...result });
-  } catch (e) {
-    res.status(400).json({ message: e.message || 'Failed to update rule' });
-  }
+    const id = req.params.id;
+    const body = req.body || {};
+    if (body.repeat) {
+      body.repeat = String(body.repeat).toLowerCase();
+      if (!['weekly', 'monthly', 'yearly'].includes(body.repeat)) {
+        return res.status(400).json({ message: 'repeat must be weekly, monthly, or yearly' });
+      }
+    }
+    const rule = await RecurringRule.findOneAndUpdate(
+      { _id: id, userId: req.user._id },
+      {
+        $set: {
+          type: body.type,
+          category: body.category,
+          source: body.source,
+          amount: body.amount,
+          repeat: body.repeat,
+          dayOfMonth: body.dayOfMonth,
+          startDate: body.startDate,
+          endDate: body.endDate,
+          isActive: body.isActive,
+          notes: body.notes,
+          tzOffsetMinutes: body.tzOffsetMinutes,
+        },
+      },
+      { new: true }
+    );
+    if (!rule) return res.status(404).json({ message: 'Rule not found' });
+    res.json(rule);
+  } catch (err) { next(err); }
 };
 
-exports.toggleRule = async (req, res) => {
+// Toggle active
+exports.toggleRule = async (req, res, next) => {
   try {
-    const userId = req.user._id || req.user.id;
-    const { id } = req.params;
-    const { isActive } = req.body;
-    const doc = await RecurringRule.findOneAndUpdate({ _id: id, userId }, { $set: { isActive: !!isActive } }, { new: true });
-    if (!doc) return res.status(404).json({ message: 'Rule not found' });
-    res.json({ rule: doc });
-  } catch (e) {
-    res.status(400).json({ message: e.message || 'Failed to toggle rule' });
-  }
+    const id = req.params.id;
+    const { isActive } = req.body || {};
+    const rule = await RecurringRule.findOneAndUpdate(
+      { _id: id, userId: req.user._id },
+      { $set: { isActive: !!isActive } },
+      { new: true }
+    );
+    if (!rule) return res.status(404).json({ message: 'Rule not found' });
+    res.json(rule);
+  } catch (err) { next(err); }
 };
 
-exports.deleteRule = async (req, res) => {
+// Delete
+exports.deleteRule = async (req, res, next) => {
   try {
-    const userId = req.user._id || req.user.id;
-    const { id } = req.params;
-    await RecurringRule.deleteOne({ _id: id, userId });
+    const id = req.params.id;
+    await RecurringRule.deleteOne({ _id: id, userId: req.user._id });
     res.json({ ok: true });
-  } catch (e) {
-    res.status(400).json({ message: e.message || 'Failed to delete rule' });
-  }
+  } catch (err) { next(err); }
 };
 
-
-exports.runNow = async (req, res) => {
+// Manual run (and also used by cron)
+exports.runNow = async (req, res, next) => {
   try {
-    const userId = req.user._id || req.user.id;
-    const result = await runGeneration(userId, true); // debug=true
-    res.json({ ok: true, ...result });
-  } catch (e) {
-    res.status(500).json({ message: e.message || 'Failed to run generator' });
-  }
+    const userId = req.user?._id || null;
+    await runRecurrenceOnce(userId); // if userId null, run for all
+    res.json({ ok: true });
+  } catch (err) { next(err); }
 };
-

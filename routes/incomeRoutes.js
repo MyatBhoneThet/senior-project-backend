@@ -5,7 +5,7 @@ const {
   getAllIncome,
   deleteIncome,
   downloadIncomeExcel,
-  updateIncome, // ← ADD
+  updateIncome,
 } = require('../controllers/incomeController');
 
 const router = express.Router();

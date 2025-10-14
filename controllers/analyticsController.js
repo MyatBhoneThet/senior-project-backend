@@ -39,23 +39,6 @@ async function sumAndItems(Model, match) {
   return { total: agg?.total || 0, count: agg?.count || 0, items };
 }
 
-/**
- * GET /api/v1/analytics/category-summary
- *   ?type=expense|income
- *   &category=<human string>       // e.g., "salary", "food", "the salary category"
- *   &range=30d|2m|all              // OR startDate/endDate
- *   &startDate=YYYY-MM-DD
- *   &endDate=YYYY-MM-DD
- *   &matchBy=auto|category|source  // default auto
- *
- * Smarts:
- * - Cleans phrases like "the salary category" -> "salary"
- * - Tries to match on categoryName / category (exact, then contains)
- * - Falls back to source (in auto/source mode)
- * - If still nothing, does a JS fallback filter across all three fields
- *   so you still get a correct total even with inconsistent legacy data.
- * - Returns suggestions of seen categories in the range when nothing matched.
- */
 exports.categorySummary = async (req, res) => {
   try {
     const { type, range = '30d', startDate, endDate } = req.query;
@@ -85,9 +68,12 @@ exports.categorySummary = async (req, res) => {
       return res.json({ type, category: 'All', range, matchedBy: 'all', ...all });
     }
 
+    // Escape regex specials
+    const esc = cleaned.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
     // Build regex attempts
-    const rxExact = new RegExp(`^${cleaned}$`, 'i');
-    const rxContains = new RegExp(cleaned.replace(/\s+/g, '.*'), 'i');
+    const rxExact = new RegExp(`^${esc}$`, 'i');
+    const rxContains = new RegExp(esc.replace(/\s+/g, '.*'), 'i');
 
     let attempts = [
       ['categoryName', rxExact],
