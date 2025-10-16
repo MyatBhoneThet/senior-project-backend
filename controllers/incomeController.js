@@ -98,6 +98,51 @@ exports.deleteIncome = async (req, res) => {
   }
 };
 
+// NEW: DELETE /api/v1/income/bulk-delete
+// Query params: ?period=all|last-month|last-6-months|last-year
+exports.bulkDeleteIncome = async (req, res) => {
+  const userId = req.user.id || req.user._id;
+  const { period } = req.query;
+
+  try {
+    let dateFilter = {};
+    const now = new Date();
+
+    switch (period) {
+      case 'last-month': {
+        const oneMonthAgo = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+        dateFilter = { date: { $gte: oneMonthAgo, $lte: now } };
+        break;
+      }
+      case 'last-6-months': {
+        const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
+        dateFilter = { date: { $gte: sixMonthsAgo, $lte: now } };
+        break;
+      }
+      case 'last-year': {
+        const oneYearAgo = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
+        dateFilter = { date: { $gte: oneYearAgo, $lte: now } };
+        break;
+      }
+      case 'all':
+        dateFilter = {};
+        break;
+      default:
+        return res.status(400).json({ message: 'Invalid period. Use: all, last-month, last-6-months, or last-year' });
+    }
+
+    const result = await Income.deleteMany({ userId, ...dateFilter });
+    
+    return res.json({ 
+      message: `${result.deletedCount} income(s) deleted successfully`,
+      deletedCount: result.deletedCount 
+    });
+  } catch (error) {
+    console.error('bulkDeleteIncome error:', error);
+    return res.status(500).json({ message: 'Server Error' });
+  }
+};
+
 // GET /api/v1/income/downloadexcel
 exports.downloadIncomeExcel = async (req, res) => {
   const userId = req.user.id || req.user._id;

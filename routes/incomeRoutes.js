@@ -6,13 +6,15 @@ const {
   deleteIncome,
   downloadIncomeExcel,
   updateIncome,
+  bulkDeleteIncome, // NEW
 } = require('../controllers/incomeController');
 
 const router = express.Router();
 
 router.post('/add', protect, addIncome);
 router.get('/get', protect, getAllIncome);
-router.put('/:id', protect, updateIncome);        // ← EDIT uses this
+router.put('/:id', protect, updateIncome);
+router.delete('/bulk-delete', protect, bulkDeleteIncome); // NEW: bulk delete route (MUST be before /:id)
 router.delete('/:id', protect, deleteIncome);
 router.get('/downloadexcel', protect, downloadIncomeExcel);
 
