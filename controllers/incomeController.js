@@ -110,18 +110,22 @@ exports.bulkDeleteIncome = async (req, res) => {
 
     switch (period) {
       case 'last-month': {
-        const oneMonthAgo = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
-        dateFilter = { date: { $gte: oneMonthAgo, $lte: now } };
+        // 1st to last day of previous calendar month
+        const firstDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+        const lastDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0, 23, 59, 59, 999));
+        dateFilter = { date: { $gte: firstDay, $lte: lastDay } };
         break;
       }
       case 'last-6-months': {
-        const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
-        dateFilter = { date: { $gte: sixMonthsAgo, $lte: now } };
+        const firstDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 6, 1));
+        const lastDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0, 23, 59, 59, 999));
+        dateFilter = { date: { $gte: firstDay, $lte: lastDay } };
         break;
       }
       case 'last-year': {
-        const oneYearAgo = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
-        dateFilter = { date: { $gte: oneYearAgo, $lte: now } };
+        const firstDay = new Date(Date.UTC(now.getUTCFullYear() - 1, 0, 1));
+        const lastDay = new Date(Date.UTC(now.getUTCFullYear() - 1, 11, 31, 23, 59, 59, 999));
+        dateFilter = { date: { $gte: firstDay, $lte: lastDay } };
         break;
       }
       case 'all':
@@ -132,7 +136,7 @@ exports.bulkDeleteIncome = async (req, res) => {
     }
 
     const result = await Income.deleteMany({ userId, ...dateFilter });
-    
+
     return res.json({ 
       message: `${result.deletedCount} income(s) deleted successfully`,
       deletedCount: result.deletedCount 
