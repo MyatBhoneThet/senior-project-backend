@@ -13,8 +13,8 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // CORS (allow Vite dev + optional APP_URL)
-// const allowOrigin = process.env.FRONTEND_URL || 'http://localhost:5173';
-const allowOrigin = 'http://localhost:5173';
+const allowOrigin = process.env.FRONTEND_URL || 'http://localhost:5173';
+// const allowOrigin = 'http://localhost:5173';
 app.use(cors({ origin: allowOrigin, credentials: false }));
 
 // COOP for charts/popups
